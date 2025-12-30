@@ -326,7 +326,7 @@ bot.on("message", async msg => {
     // Fetch novel info
     const loadingMsg = await bot.sendMessage(chatId, `⏳ Fetching *${siteName}* info...`, { parse_mode: "Markdown" });
 
-    const { title, description, coverImage } = await fetchNovelInfo(novelUrl);
+    const { title, description/*, coverImage*/ } = await fetchNovelInfo(novelUrl);
 
     // Store URL in session and get short ID
     const sessionId = storeNovelURL(novelUrl);
@@ -341,35 +341,19 @@ bot.on("message", async msg => {
       ]
     };
 
+    // Reply format as per your screenshot (no image, styled text)
     let caption = `📖 *${title}*\n\n${description}\n\n_Select option or enter custom chapter count:_`;
 
     try {
       // Delete loading message first
       await bot.deleteMessage(chatId, loadingMsg.message_id);
-      
-      if (coverImage) {
-        // Send new photo message with cover
-        try {
-          await bot.sendPhoto(chatId, coverImage, {
-            caption: caption,
-            parse_mode: "Markdown",
-            reply_markup: keyboard
-          });
-        } catch (photoErr) {
-          // If photo fails, try as text
-          console.log(`Cover image failed (${photoErr.message}), sending as text`);
-          await bot.sendMessage(chatId, caption, {
-            parse_mode: "Markdown",
-            reply_markup: keyboard
-          });
-        }
-      } else {
-        // No cover image, send as text
-        await bot.sendMessage(chatId, caption, {
-          parse_mode: "Markdown",
-          reply_markup: keyboard
-        });
-      }
+
+      // Send the info as a text message with inline buttons (no photo)
+      await bot.sendMessage(chatId, caption, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
     } catch (err) {
       console.error("Error sending novel info:", err.message);
       await bot.sendMessage(chatId, "❌ Error loading novel. Please try again.", { parse_mode: "Markdown" });
