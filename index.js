@@ -108,39 +108,47 @@ async function fetchNovelInfo(url) {
     
     const { data } = await axios.get(url, { 
       headers, 
-      timeout: 8000,
+      timeout: 10000,
       validateStatus: () => true 
     });
     const $ = cheerio.load(data);
 
-    let title = $("h1").first().text().trim() || "Novel";
+    let title = $("h1").first().text().trim() || $("title").text().trim() || "Novel";
     let description = "";
-    let coverImage = "";
 
-    // Extract description
     const descSelectors = [
       ".novel-intro",
       ".description",
       "[class*='desc']",
       ".synopsis",
-      ".summary"
+      ".summary",
+      ".novel-summary",
+      "#summary",
+      ".entry-content p"
     ];
 
     for (const selector of descSelectors) {
       const text = $(selector).text().trim();
-      if (text && text.length > 20) {
-        description = text.substring(0, 300);
+      if (text && text.length > 30) {
+        description = text.substring(0, 500);
         break;
       }
     }
+    if (!description) {
+      description = "No description available";
+    }
 
-    // Extract cover image
+    // We keep coverImage but don't send by default here (your screenshot has no image in message)
+    let coverImage = "";
     const coverSelectors = [
       "img[class*='cover']",
       "img[class*='poster']",
       ".novel-cover img",
       ".book-cover img",
-      "img[alt*='cover']"
+      "#cover img",
+      ".summary img",
+      "img[alt*='cover']",
+      ".wp-post-image"
     ];
 
     for (const selector of coverSelectors) {
@@ -151,8 +159,9 @@ async function fetchNovelInfo(url) {
       }
     }
 
-    return { title, description: description || "No description available", coverImage };
+    return { title, description, coverImage };
   } catch (err) {
+    console.error("FetchNovelInfo error:", err.message);
     return { 
       title: "Novel", 
       description: "Unable to fetch description", 
@@ -326,7 +335,7 @@ bot.on("message", async msg => {
     // Fetch novel info
     const loadingMsg = await bot.sendMessage(chatId, `⏳ Fetching *${siteName}* info...`, { parse_mode: "Markdown" });
 
-    const { title, description/*, coverImage*/ } = await fetchNovelInfo(novelUrl);
+    const { title, description } = await fetchNovelInfo(novelUrl);
 
     // Store URL in session and get short ID
     const sessionId = storeNovelURL(novelUrl);
@@ -341,14 +350,12 @@ bot.on("message", async msg => {
       ]
     };
 
-    // Reply format as per your screenshot (no image, styled text)
-    let caption = `📖 *${title}*\n\n${description}\n\n_Select option or enter custom chapter count:_`;
+    const caption = `📖 *${title}*\n\n${description}\n\n_Select option or enter custom chapter count:_`;
 
     try {
-      // Delete loading message first
       await bot.deleteMessage(chatId, loadingMsg.message_id);
 
-      // Send the info as a text message with inline buttons (no photo)
+      // Send the info text with inline buttons
       await bot.sendMessage(chatId, caption, {
         parse_mode: "Markdown",
         reply_markup: keyboard
@@ -361,7 +368,6 @@ bot.on("message", async msg => {
   } else if (msg.text && !msg.text.startsWith("/")) {
     const chatId = msg.chat.id;
     
-    // Check if we're waiting for a custom chapter count
     const waiting = getWaitingForRange(chatId);
     if (waiting) {
       const chapterCount = parseInt(msg.text);
@@ -390,20 +396,16 @@ bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
 
-  // Handle custom range button: cr_s_123
   if (data.startsWith("cr_")) {
     const sessionId = data.substring(3);
     setWaitingForRange(chatId, sessionId, query.message.message_id);
     await bot.answerCallbackQuery(query.id, "📝 Send the number of chapters", false);
     await bot.sendMessage(chatId, "📝 How many chapters do you want? (1-200)\n\nExample: 50");
-  }
-  // Handle all chapters or preset: sc_999_s_123
-  else if (data.startsWith("sc_")) {
+  } else if (data.startsWith("sc_")) {
     const parts = data.split("_");
     const chapterLimit = parseInt(parts[1]);
     const sessionId = parts.slice(2).join("_");
 
-    // Get URL from session
     const novelUrl = getNovelURL(sessionId);
     
     if (!novelUrl) {
@@ -411,10 +413,8 @@ bot.on("callback_query", async (query) => {
       return;
     }
 
-    // Acknowledge button click
     await bot.answerCallbackQuery(query.id, "⏳ Starting to scrape...", false);
 
-    // Process the novel
     const processingMsg = query.message;
     await processNovel(chatId, novelUrl, chapterLimit, processingMsg);
   }
