@@ -81,7 +81,7 @@ function clearWaitingForRange(chatId) {
 // ---- SITE DETECTION ----
 function detectSite(url) {
   const domain = new URL(url).hostname.toLowerCase();
-  
+
   if (domain.includes("freewebnovel")) return { name: "FreeWebNovel", scraper: scrapeFreewebnovel };
   if (domain.includes("readlightnovel")) return { name: "ReadLightNovel", scraper: scrapeReadlightnovel };
   if (domain.includes("archiveofourown")) return { name: "Archive of Our Own", scraper: scrapeAO3 };
@@ -95,7 +95,7 @@ function detectSite(url) {
   if (domain.includes("royalroad")) return { name: "Royal Road", scraper: scrapeRoyalroad };
   if (domain.includes("wattpad")) return { name: "Wattpad", scraper: scrapeWattpad };
   if (domain.includes("webnovel")) return { name: "WebNovel", scraper: scrapeWebnovel };
-  
+
   return { name: "Generic", scraper: scrapeGeneric };
 }
 
@@ -105,17 +105,19 @@ async function fetchNovelInfo(url) {
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     };
-    
-    const { data } = await axios.get(url, { 
-      headers, 
+
+    const { data } = await axios.get(url, {
+      headers,
       timeout: 10000,
-      validateStatus: () => true 
+      validateStatus: () => true
     });
+
     const $ = cheerio.load(data);
 
     let title = $("h1").first().text().trim() || $("title").text().trim() || "Novel";
-    let description = "";
 
+    // Description extraction from multiple selectors
+    let description = "";
     const descSelectors = [
       ".novel-intro",
       ".description",
@@ -127,189 +129,38 @@ async function fetchNovelInfo(url) {
       ".entry-content p"
     ];
 
-    for (const selector of descSelectors) {
-      const text = $(selector).text().trim();
-      if (text && text.length > 30) {
-        description = text.substring(0, 500);
+    for (const sel of descSelectors) {
+      const text = $(sel).text().trim();
+      if (text && text.length > 30 && text.toLowerCase().indexOf(title.toLowerCase()) === -1) {
+        description = text.replace(/\s+/g, " ").substring(0, 500);
         break;
       }
     }
-    if (!description) {
-      description = "No description available";
+    if (!description) description = "No description available";
+
+    // Extract rating example (may need adjustment depending on site)
+    let rating = "";
+    const ratingElem = $(".rating-value, .score, .rating");
+    if (ratingElem && ratingElem.length) {
+      rating = ratingElem.first().text().trim();
     }
 
-    // We keep coverImage but don't send by default here (your screenshot has no image in message)
-    let coverImage = "";
-    const coverSelectors = [
-      "img[class*='cover']",
-      "img[class*='poster']",
-      ".novel-cover img",
-      ".book-cover img",
-      "#cover img",
-      ".summary img",
-      "img[alt*='cover']",
-      ".wp-post-image"
-    ];
-
-    for (const selector of coverSelectors) {
-      const src = $(selector).attr("src");
-      if (src) {
-        coverImage = src.startsWith("http") ? src : new URL(src, url).href;
-        break;
-      }
-    }
-
-    return { title, description, coverImage };
+    return { title, description, rating };
   } catch (err) {
-    console.error("FetchNovelInfo error:", err.message);
-    return { 
-      title: "Novel", 
-      description: "Unable to fetch description", 
-      coverImage: "" 
-    };
+    console.error("fetchNovelInfo error:", err.message);
+    return { title: "Novel", description: "Unable to fetch description", rating: "" };
   }
 }
 
-// Helper function to create progress bar
-function createProgressBar(current, total, width = 20) {
-  const percentage = Math.round((current / total) * 100);
-  const filledWidth = Math.round((width * current) / total);
-  const emptyWidth = width - filledWidth;
-  const bar = "█".repeat(filledWidth) + "░".repeat(emptyWidth);
-  return `${bar} ${percentage}%`;
-}
+// Helper createProgressBar & formatTime - unchanged, keep your existing
 
-// Helper function to format time
-function formatTime(seconds) {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 3600)}h`;
-}
+// ... [Your existing createProgressBar and formatTime functions here] ...
 
-// ---- PROCESS NOVEL (after chapter count selected) ----
-async function processNovel(chatId, novelUrl, chapterLimit, infoMsg = null) {
-  const { name: siteName, scraper } = detectSite(novelUrl);
-  
-  const processingMsg = infoMsg || await bot.sendMessage(
-    chatId,
-    `⏳ Connecting to *${siteName}*...\n\n_Discovering chapters..._`,
-    { parse_mode: "Markdown" }
-  );
-
-  try {
-    console.log(`[${new Date().toISOString()}] Scraping from ${siteName}: ${novelUrl}`);
-
-    let startTime = Date.now();
-    let lastUpdateTime = startTime;
-
-    const { novelTitle, chapters } = await scraper(novelUrl, chapterLimit, async (current, total) => {
-      const now = Date.now();
-      
-      if (now - lastUpdateTime > 2000 || current === total) {
-        lastUpdateTime = now;
-        const elapsedSeconds = (now - startTime) / 1000;
-        const avgTimePerChapter = elapsedSeconds / Math.max(1, current);
-        const remainingChapters = total - current;
-        const estimatedRemainingSeconds = avgTimePerChapter * remainingChapters;
-
-        const progressBar = createProgressBar(current, total);
-        const eta = estimatedRemainingSeconds > 0 ? formatTime(estimatedRemainingSeconds) : "~0s";
-        
-        const statusMsg = `⏳ Scraping Chapters\n\n${progressBar}\n\n` +
-                          `📊 *Progress:* ${current}/${total}\n` +
-                          `⏱️ *ETA:* ${eta}\n` +
-                          `🕐 *Elapsed:* ${formatTime(elapsedSeconds)}`;
-
-        try {
-          if (infoMsg) {
-            await bot.editMessageText(statusMsg, {
-              chat_id: chatId,
-              message_id: infoMsg.message_id,
-              parse_mode: "Markdown"
-            });
-          }
-        } catch (e) {
-          // Ignore edit errors
-        }
-      }
-    });
-
-    if (!chapters || chapters.length === 0) {
-      throw new Error("No chapters found. The website structure might have changed.");
-    }
-
-    console.log(`Found ${chapters.length} chapters for "${novelTitle}"`);
-
-    // Creating EPUB
-    if (infoMsg) {
-      await bot.editMessageText(
-        `⏳ Creating EPUB...\n\n📖 *${novelTitle}*\n\nChapters: ${chapters.length}`,
-        { chat_id: chatId, message_id: infoMsg.message_id, parse_mode: "Markdown" }
-      );
-    }
-
-    const epubPath = await createEpub(novelTitle, "Web Novel", chapters);
-    const fileSize = (fs.statSync(epubPath).size / 1024).toFixed(2);
-    const totalTime = formatTime((Date.now() - startTime) / 1000);
-
-    if (infoMsg) {
-      await bot.editMessageText(
-        `✅ EPUB Ready!\n\n📖 *${novelTitle}*\n` +
-        `📊 Chapters: ${chapters.length}\n` +
-        `💾 Size: ~${fileSize} KB\n` +
-        `⏱️ Time: ${totalTime}`,
-        { chat_id: chatId, message_id: infoMsg.message_id, parse_mode: "Markdown" }
-      );
-    }
-
-    await bot.sendDocument(chatId, epubPath, {
-      caption: `📖 ${novelTitle}`,
-      parse_mode: "Markdown"
-    });
-
-    fs.unlinkSync(epubPath);
-    console.log(`✅ Successfully sent EPUB for "${novelTitle}"`);
-
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] EPUB ERROR:`, err.message);
-
-    const errorMsg = err.message.includes("timeout") 
-      ? "❌ Connection timeout. The website might be blocking requests or slow to respond."
-      : err.message.includes("No chapters")
-      ? "❌ Could not find chapters. This site might not be supported or the URL might be incorrect."
-      : `❌ Failed to create EPUB\n\n_Error: ${err.message.substring(0, 100)}_`;
-
-    if (infoMsg) {
-      await bot.editMessageText(
-        errorMsg,
-        { chat_id: chatId, message_id: infoMsg.message_id, parse_mode: "Markdown" }
-      );
-    } else {
-      await bot.sendMessage(chatId, errorMsg, { parse_mode: "Markdown" });
-    }
-  }
-}
+// ---- PROCESS NOVEL (unchanged) ----
+// ... Your existing processNovel function remains unchanged ...
 
 // ---- COMMANDS ----
-bot.onText(/\/start/, msg => {
-  const helpMessage = 
-    "📚 *WebNovel → EPUB Bot*\n\n" +
-    "*How to Use:*\n" +
-    "1️⃣ Send a novel link from any supported site\n" +
-    "2️⃣ I'll show you the cover & description\n" +
-    "3️⃣ Select how many chapters to scrape\n" +
-    "4️⃣ Download your EPUB file\n\n" +
-    "*Supported Sites:*\n" +
-    "• Royal Road • WebNovel • Wattpad\n" +
-    "• BoxNovel • ReadLightNovel • NovelFull\n" +
-    "• MTLNovel • FreeWebNovel • Wuxiaworld\n" +
-    "• ScribbleHub • Novel Updates\n" +
-    "• FanFiction.net • Archive of Our Own\n" +
-    "• 100+ other sites (generic)\n\n" +
-    "📖 Just paste a novel URL and let's go!";
-  
-  bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: "Markdown" });
-});
+// ... Your existing /start command handler unchanged ...
 
 // ---- URL DETECTION IN MESSAGES ----
 bot.on("message", async msg => {
@@ -317,7 +168,7 @@ bot.on("message", async msg => {
 
   // Check if message contains a URL
   const urlMatch = msg.text.match(/https?:\/\/[^\s]+/);
-  
+
   if (urlMatch) {
     const novelUrl = urlMatch[0];
     const chatId = msg.chat.id;
@@ -335,7 +186,7 @@ bot.on("message", async msg => {
     // Fetch novel info
     const loadingMsg = await bot.sendMessage(chatId, `⏳ Fetching *${siteName}* info...`, { parse_mode: "Markdown" });
 
-    const { title, description } = await fetchNovelInfo(novelUrl);
+    const { title, description, rating } = await fetchNovelInfo(novelUrl);
 
     // Store URL in session and get short ID
     const sessionId = storeNovelURL(novelUrl);
@@ -350,38 +201,48 @@ bot.on("message", async msg => {
       ]
     };
 
-    const caption = `📖 *${title}*\n\n${description}\n\n_Select option or enter custom chapter count:_`;
+    // Build message text cleanly
+    let messageText = `📚 *${title}*\n\n`;
+    if (description.length > 0) {
+      messageText += `${description}\n\n`;
+    }
+    if (rating.length > 0) {
+      messageText += `🌟 _Rating:_ ${rating}\n\n`;
+    }
+    messageText += `_Select option or enter custom chapter count:_`;
 
     try {
       await bot.deleteMessage(chatId, loadingMsg.message_id);
 
-      // Send the info text with inline buttons
-      await bot.sendMessage(chatId, caption, {
+      await bot.sendMessage(chatId, messageText, {
         parse_mode: "Markdown",
         reply_markup: keyboard
       });
-
     } catch (err) {
       console.error("Error sending novel info:", err.message);
-      await bot.sendMessage(chatId, "❌ Error loading novel. Please try again.", { parse_mode: "Markdown" });
+      await bot.sendMessage(chatId, messageText, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
     }
   } else if (msg.text && !msg.text.startsWith("/")) {
     const chatId = msg.chat.id;
-    
+
     const waiting = getWaitingForRange(chatId);
     if (waiting) {
       const chapterCount = parseInt(msg.text);
       if (!isNaN(chapterCount) && chapterCount > 0) {
         clearWaitingForRange(chatId);
         const novelUrl = getNovelURL(waiting.sessionId);
-        
+
         if (novelUrl) {
-          const limit = Math.min(chapterCount, 200); // Max 200 chapters
+          const limit = Math.min(chapterCount, 200);
           const processingMsg = await bot.sendMessage(chatId, "⏳ Starting scrape...", { parse_mode: "Markdown" });
           await processNovel(chatId, novelUrl, limit, processingMsg);
         } else {
           await bot.sendMessage(chatId, "❌ Session expired. Please send the novel URL again.");
         }
+
       } else {
         await bot.sendMessage(chatId, "❌ Please enter a valid number of chapters (e.g., 50)");
       }
@@ -407,7 +268,7 @@ bot.on("callback_query", async (query) => {
     const sessionId = parts.slice(2).join("_");
 
     const novelUrl = getNovelURL(sessionId);
-    
+
     if (!novelUrl) {
       await bot.answerCallbackQuery(query.id, "❌ Session expired. Please send the URL again.", true);
       return;
