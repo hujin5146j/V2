@@ -99,7 +99,7 @@ function detectSite(url) {
   return { name: "Generic", scraper: scrapeGeneric };
 }
 
-// ---- FETCH NOVEL INFO ----
+// ---- FETCH NOVEL INFO WITH COVER, DESCRIPTION, RATING ----
 async function fetchNovelInfo(url) {
   try {
     const headers = {
@@ -114,10 +114,10 @@ async function fetchNovelInfo(url) {
 
     const $ = cheerio.load(data);
 
+    // Get title
     let title = $("h1").first().text().trim() || $("title").text().trim() || "Novel";
 
-    // Description extraction from multiple selectors
-    let description = "";
+    // Extract description from multiple selectors to be robust
     const descSelectors = [
       ".novel-intro",
       ".description",
@@ -129,6 +129,7 @@ async function fetchNovelInfo(url) {
       ".entry-content p"
     ];
 
+    let description = "";
     for (const sel of descSelectors) {
       const text = $(sel).text().trim();
       if (text && text.length > 30 && text.toLowerCase().indexOf(title.toLowerCase()) === -1) {
@@ -138,42 +139,59 @@ async function fetchNovelInfo(url) {
     }
     if (!description) description = "No description available";
 
-    // Extract rating example (may need adjustment depending on site)
+    // Extract cover image URL
+    const coverSelectors = [
+      "img[class*='cover']",
+      "img[class*='poster']",
+      ".novel-cover img",
+      ".book-cover img",
+      "#cover img",
+      ".summary img",
+      "img[alt*='cover']",
+      ".wp-post-image"
+    ];
+
+    let coverImage = "";
+    for (const selector of coverSelectors) {
+      const src = $(selector).attr("src");
+      if (src) {
+        coverImage = src.startsWith("http") ? src : new URL(src, url).href;
+        break;
+      }
+    }
+
+    // Extract rating text if present (optional)
     let rating = "";
     const ratingElem = $(".rating-value, .score, .rating");
     if (ratingElem && ratingElem.length) {
       rating = ratingElem.first().text().trim();
     }
 
-    return { title, description, rating };
+    return { title, description, coverImage, rating };
   } catch (err) {
     console.error("fetchNovelInfo error:", err.message);
-    return { title: "Novel", description: "Unable to fetch description", rating: "" };
+    return { title: "Novel", description: "Unable to fetch description", coverImage: "", rating: "" };
   }
 }
 
-// Helper createProgressBar & formatTime - unchanged, keep your existing
+// Helper functions: createProgressBar and formatTime (keep your original ones)
 
-// ... [Your existing createProgressBar and formatTime functions here] ...
-
-// ---- PROCESS NOVEL (unchanged) ----
-// ... Your existing processNovel function remains unchanged ...
+// ---- PROCESS NOVEL unchanged ----
+// ... keep your existing processNovel function here ...
 
 // ---- COMMANDS ----
-// ... Your existing /start command handler unchanged ...
+// ... keep your existing /start command handler ...
 
-// ---- URL DETECTION IN MESSAGES ----
+// ---- URL DETECTION IN MESSAGES AND RESPONSE WITH COVER, DESCRIPTION, RATING ----
 bot.on("message", async msg => {
   if (!msg.text) return;
 
-  // Check if message contains a URL
   const urlMatch = msg.text.match(/https?:\/\/[^\s]+/);
 
   if (urlMatch) {
     const novelUrl = urlMatch[0];
     const chatId = msg.chat.id;
 
-    // Validate URL
     try {
       new URL(novelUrl);
     } catch (e) {
@@ -183,15 +201,12 @@ bot.on("message", async msg => {
 
     const { name: siteName } = detectSite(novelUrl);
 
-    // Fetch novel info
     const loadingMsg = await bot.sendMessage(chatId, `⏳ Fetching *${siteName}* info...`, { parse_mode: "Markdown" });
 
-    const { title, description, rating } = await fetchNovelInfo(novelUrl);
+    const { title, description, coverImage, rating } = await fetchNovelInfo(novelUrl);
 
-    // Store URL in session and get short ID
     const sessionId = storeNovelURL(novelUrl);
 
-    // Create chapter selection buttons
     const keyboard = {
       inline_keyboard: [
         [
@@ -201,12 +216,8 @@ bot.on("message", async msg => {
       ]
     };
 
-    // Build message text cleanly
-    let messageText = `📚 *${title}*\n\n`;
-    if (description.length > 0) {
-      messageText += `${description}\n\n`;
-    }
-    if (rating.length > 0) {
+    let messageText = `📚 *${title}*\n\n${description}\n\n`;
+    if (rating) {
       messageText += `🌟 _Rating:_ ${rating}\n\n`;
     }
     messageText += `_Select option or enter custom chapter count:_`;
@@ -214,12 +225,20 @@ bot.on("message", async msg => {
     try {
       await bot.deleteMessage(chatId, loadingMsg.message_id);
 
-      await bot.sendMessage(chatId, messageText, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
+      if (coverImage) {
+        await bot.sendPhoto(chatId, coverImage, {
+          caption: messageText,
+          parse_mode: "Markdown",
+          reply_markup: keyboard
+        });
+      } else {
+        await bot.sendMessage(chatId, messageText, {
+          parse_mode: "Markdown",
+          reply_markup: keyboard
+        });
+      }
     } catch (err) {
-      console.error("Error sending novel info:", err.message);
+      console.error("Error sending novel info:", err);
       await bot.sendMessage(chatId, messageText, {
         parse_mode: "Markdown",
         reply_markup: keyboard
@@ -234,7 +253,6 @@ bot.on("message", async msg => {
       if (!isNaN(chapterCount) && chapterCount > 0) {
         clearWaitingForRange(chatId);
         const novelUrl = getNovelURL(waiting.sessionId);
-
         if (novelUrl) {
           const limit = Math.min(chapterCount, 200);
           const processingMsg = await bot.sendMessage(chatId, "⏳ Starting scrape...", { parse_mode: "Markdown" });
@@ -242,7 +260,6 @@ bot.on("message", async msg => {
         } else {
           await bot.sendMessage(chatId, "❌ Session expired. Please send the novel URL again.");
         }
-
       } else {
         await bot.sendMessage(chatId, "❌ Please enter a valid number of chapters (e.g., 50)");
       }
@@ -252,7 +269,7 @@ bot.on("message", async msg => {
   }
 });
 
-// ---- CALLBACK QUERY HANDLER (button clicks) ----
+// ---- CALLBACK QUERY HANDLER ----
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
