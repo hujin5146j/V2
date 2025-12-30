@@ -1,3 +1,10 @@
+// Fix for undici ReferenceError: File is not defined
+if (typeof File === 'undefined') {
+  global.File = class File {
+    constructor() {}
+  };
+}
+
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const cheerio = require("cheerio");
